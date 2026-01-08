@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Three.js Proof Tree</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: black;
+      }
+    </style>
+  </head>
+  <body>
+    <script src="https://cdn.jsdelivr.net/npm/ccapture.js@1.1.0/build/CCapture.all.min.js"></script>
+
+    <script type="module">
+      import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.161/build/three.module.js";
+
+      // ===============================
+      // Graph State
+      // ===============================
+      let tree = {};
+      let ctx = {};
+      let pos = {};
+      let nid = 0;
+
+      let Crep = 20;
+      let Cspring = 10;
+      let l = 20;
+
+      // =====================
+      // Logic term constructors
+      // =====================
+      class Op {}
+      class And extends Op {
+        constructor(fst, snd) {
+          super();
+          this.fst = fst;
+          this.snd = snd;
+        }
+      }
+      class Or extends Op {
+        constructor(fst, snd) {
+          super();
+          this.fst = fst;
+          this.snd = snd;
+        }
+      }
+      class Imp extends Op {
+        constructor(fst, snd) {
+          super();
+          this.fst = fst;
+          this.snd = snd;
+        }
+      }
+      class At extends Op {
+        constructor(fst) {
+          super();
+          this.fst = fst;
+        }
+      }
+      class F extends Op {}
+
+      // =====================
+      // Helpers
+      // =====================
+      function eq(a, b) {
+        if (a instanceof At && b instanceof At) return a.fst === b.fst;
+        if (a instanceof F && b instanceof F) return true;
+
+        if (a.constructor !== b.constructor) return false;
+        return eq(a.fst, b.fst) && eq(a.snd, b.snd);
+      }
+
+      function containsOp(list, x) {
+        return list.some((v) => eq(v, x));
+      }
+
+      let handle = () => {}; // will be wired by caller
+
+      // emit helper
+      function emit(...args) {
+        handle(args);
+      }
+
+      // =====================
+      // Prover
+      // =====================
+      function prove(typ, pid, pre, post) {
+        nid += 1;
+        const cid = nid;
+
+        emit("node", typ, pid, cid, pre.slice(), post);
+
+        for (let _ = 0; _ < pre.length; _++) {
+          const head = pre[0];
+          const rest = pre.slice(1);
+
+          // [At(x), *rest] if At(x)==post
+          if (head instanceof At && eq(head, post)) {
+            emit("end", cid, [head, ...rest], post);
+            return true;
+          }
+
+          // [F(), *rest]
+          if (head instanceof F) {
+            emit("end", cid, [head, ...rest], post);
+            return true;
+          }
+
+          // [Or(x,y), *rest]
+          if (head instanceof Or) {
+            const { fst: x, snd: y } = head;
+            if (
+              prove("more", cid, [x, ...rest], post) &&
+              prove("last", cid, [y, ...rest], post)
+            )
+              return true;
+          }
+
+          // [And(x,y), *rest]
+          if (head instanceof And) {
+            const { fst: x, snd: y } = head;
+            if (prove("one", cid, [x, y, ...rest], post)) return true;
+          }
+
+          // [Imp(At(a), b), *rest] if At(a) in rest
+          if (head instanceof Imp && head.fst instanceof At) {
+            const a = head.fst.fst;
+            const b = head.snd;
+
+            if (containsOp(rest, new At(a))) {
+              if (prove("one", cid, [b, ...rest], post)) return true;
+            }
+          }
+
+          // Imp(And(c,d), b)
+          if (head instanceof Imp && head.fst instanceof And) {
+            const { fst: c, snd: d } = head.fst;
+            const b = head.snd;
+            if (prove("one", cid, [new Imp(c, new Imp(d, b)), ...rest], post))
+              return true;
+          }
+
+          // Imp(Or(c,d), b)
+          if (head instanceof Imp && head.fst instanceof Or) {
+            const { fst: c, snd: d } = head.fst;
+            const b = head.snd;
+            if (
+              prove("one", cid, [new Imp(c, b), new Imp(d, b), ...rest], post)
+            )
+              return true;
+          }
+
+          // Imp(Imp(c,d), b)
+          if (head instanceof Imp && head.fst instanceof Imp) {
+            const { fst: c, snd: d } = head.fst;
+            const b = head.snd;
+            if (
+              prove("more", cid, [new Imp(d, b), ...rest], new Imp(c, d)) &&
+              prove("last", cid, [b, ...rest], post)
+            )
+              return true;
+          }
+
+          // rotate pre
+          pre = rest.concat([head]);
+        }
+
+        // match post
+        if (post instanceof At) {
+          emit("end", cid, pre.slice(), post);
+          return containsOp(pre, post);
+        }
+
+        if (post instanceof And) {
+          if (
+            prove("more", cid, pre.slice(), post.fst) &&
+            prove("last", cid, pre.slice(), post.snd)
+          )
+            return true;
+        }
+
+        if (post instanceof Or) {
+          if (
+            prove("try", cid, pre.slice(), post.fst) ||
+            prove("last", cid, pre.slice(), post.snd)
+          )
+            return true;
+        }
+
+        if (post instanceof Imp) {
+          if (prove("one", cid, [...pre, post.fst], post.snd)) return true;
+        }
+
+        return false;
+      }
+
+      // =====================
+      // ENTRY: start + example
+      // =====================
+      function runProver(pre, post) {
+        nid = 0;
+        emit("start", pre.slice(), post);
+        console.log("Prover result:", prove(0, "start", pre.slice(), post));
+      }
+
+      // ===============================
+      // THREE SETUP
+      // ===============================
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x000000);
+
+      const camera = new THREE.PerspectiveCamera(
+        50,
+        innerWidth / innerHeight,
+        0.1,
+        10000
+      );
+      camera.position.set(0, 0, 200);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(innerWidth, innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      window.addEventListener("resize", () => {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+      });
+
+      // Field plane geometry
+      const planeGeo = new THREE.PlaneGeometry(200, 200, 256, 256);
+
+      // Shader material for field
+      const planeMat = new THREE.ShaderMaterial({
+        uniforms: {
+          nodes: { value: [] }, // node positions array
+          nodeCount: { value: 0 }, // number of nodes
+          time: { value: 0 }, // for optional animation
+        },
+        vertexShader: `
+        varying vec3 vPos;
+        void main() {
+            vPos = position;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+        }
+    `,
+        fragmentShader: `
+        uniform vec3 nodes[100]; // max 100 nodes
+        uniform int nodeCount;
+        uniform float time;
+        varying vec3 vPos;
+
+        void main() {
+            float intensity = 0.3;
+            for (int i=0; i<100; i++) {
+                if (i >= nodeCount) break;
+                float r = length(vPos.xy - nodes[i].xy);
+                intensity += 1.0 / (r + 0.1);   // 1/r falloff
+            }
+            intensity = clamp(intensity, 0.0, 1.0); // optional clamp
+            gl_FragColor = vec4(intensity, 0.5*intensity, 1.0-intensity, 1.0); // color mapping
+        }
+    `,
+        transparent: true,
+      });
+      const fieldPlane = new THREE.Mesh(planeGeo, planeMat);
+      fieldPlane.position.z = -1; // behind graph
+      scene.add(fieldPlane);
+
+      // ===============================
+      // Visual objects
+      // ===============================
+      const nodes = new Map();
+      const edges = [];
+      function addNodeVisual(id) {
+        const geometry = new THREE.SphereGeometry(6, 24, 24);
+
+        // Use ShaderMaterial
+        const material = new THREE.ShaderMaterial({
+          uniforms: {
+            time: { value: 0 },
+            color: { value: new THREE.Color(0xff4444) },
+            scale: { value: 1 },
+          },
+          vertexShader: `
+            uniform float time;
+            uniform float scale;
+            void main() {
+                // do not override the node position
+                vec3 pos = position; // local geometry
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+            }
+        `,
+          fragmentShader: `
+            uniform float time;
+            void main() {
+                float hue = mod(time*0.2, 1.0);
+                float r = abs(sin(hue * 6.2831));
+                float g = abs(sin((hue + 0.333) * 6.2831));
+                float b = abs(sin((hue + 0.666) * 6.2831));
+                gl_FragColor = vec4(r, g, b, 1.0);
+            }
+        `,
+        });
+
+        const mesh = new THREE.Mesh(geometry, material.clone());
+
+        // Set mesh.position to the layout position
+        mesh.position.set(pos[id][0], pos[id][1], 0);
+
+        scene.add(mesh);
+        nodes[id] = mesh;
+      }
+
+      function addEdgeVisual(a, b) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute(
+          "position",
+          new THREE.BufferAttribute(new Float32Array(6), 3)
+        );
+        const mat = new THREE.ShaderMaterial({
+          uniforms: { time: { value: 0 } },
+          vertexShader: `
+            void main() {
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+            }`,
+          fragmentShader: `
+            uniform float time;
+            void main() {
+                gl_FragColor = vec4(vec3(0.5 + 0.5*sin(time*5.0)), 1.0);
+            }`,
+          transparent: true,
+        });
+        const line = new THREE.Line(geo, mat);
+        line.userData.a = a;
+        line.userData.b = b;
+        scene.add(line);
+        edges.push(line);
+      }
+
+      function updateVisualPositions() {
+        for (const id in nodes) {
+          nodes[id].position.set(pos[id][0], pos[id][1], 0);
+        }
+
+        edges.forEach((line) => {
+          const a = pos[line.userData.a];
+          const b = pos[line.userData.b];
+          const arr = line.geometry.attributes.position.array;
+          arr[0] = a[0];
+          arr[1] = a[1];
+          arr[2] = 0;
+          arr[3] = b[0];
+          arr[4] = b[1];
+          arr[5] = 0;
+          line.geometry.attributes.position.needsUpdate = true;
+        });
+      }
+
+      // ===============================
+      // Failure propagation
+      // ===============================
+      function propagateFailure(node = "start") {
+        for (const n of tree[node]) {
+          if (ctx[n] === "FAILURE" && tree[node].length <= 2) {
+            ctx[node] = "FAILURE";
+            if (nodes.has(node)) nodes.get(node).material.color.set(0x555555);
+          }
+          propagateFailure(n);
+        }
+      }
+
+      // ===============================
+      // EVENT HANDLER (Three.js version)
+      // ===============================
+      const nodeQueue = [];
+      let queueRunning = false;
+
+      function enqueueNode(args) {
+        nodeQueue.push(args);
+        if (!queueRunning) processQueue();
+      }
+
+      function processQueue() {
+        if (nodeQueue.length === 0) {
+          queueRunning = false;
+          return;
+        }
+        queueRunning = true;
+
+        const args = nodeQueue.shift();
+        handleForceImmediate(args, processQueue); // call next node after relaxation
+      }
+
+      const maxNodes = 100;
+      const nodeArray = [];
+      for (let i = 0; i < maxNodes; i++) {
+        nodeArray.push(new THREE.Vector3(0, 0, 0));
+      }
+      fieldPlane.material.uniforms.nodes.value = nodeArray;
+
+      // --- internal handler for a single node ---
+      function handleForceImmediate(args, onFinish) {
+        const [event] = args;
+
+        switch (event) {
+          case "start": {
+            const [_, pre, post] = args;
+            tree = { start: [] };
+            pos = { start: [0, 0] };
+            ctx = {};
+            break;
+          }
+
+          case "node": {
+            const [_, typ, pid, cid, pre, post] = args;
+            const id = String(cid);
+            const parent = String(pid);
+
+            tree[parent] = tree[parent] || [];
+            tree[parent].push(id);
+            tree[id] = [];
+
+            ctx[id] = "SUCCESS";
+
+            // initial random placement
+            const angle = Math.random() * Math.PI * 2;
+            const radius = 10;
+            pos[id] = [
+              pos[parent][0] + radius * Math.cos(angle),
+              pos[parent][1] + radius * Math.sin(angle),
+            ];
+
+            addNodeVisual(id, 0xff4444);
+            addEdgeVisual(parent, id);
+
+            // --- relaxation ---
+            let it = 0;
+            const maxIt = 60;
+
+            function relaxStep() {
+              if (it >= maxIt) {
+                if (onFinish) onFinish(); // start next node
+                return;
+              }
+
+              // compute repulsive forces
+              let force = {};
+              for (const v in tree) {
+                force[v] = [0, 0];
+                for (const u in tree) {
+                  if (
+                    u !== v &&
+                    u !== id &&
+                    ctx[u] !== "FAILURE" &&
+                    ctx[v] !== "FAILURE"
+                  ) {
+                    const dx = pos[v][0] - pos[u][0];
+                    const dy = pos[v][1] - pos[u][1];
+                    const d = Math.sqrt(dx * dx + dy * dy) + 0.001;
+                    const rep = Crep / (d * d);
+                    force[v][0] += rep * (dx / d);
+                    force[v][1] += rep * (dy / d);
+                  }
+                }
+              }
+
+              // compute attractive forces
+              for (const v in tree) {
+                for (const u of tree[v]) {
+                  const dx = pos[v][0] - pos[u][0];
+                  const dy = pos[v][1] - pos[u][1];
+                  const d = Math.sqrt(dx * dx + dy * dy) + 0.001;
+                  const att = Cspring * Math.log(d / l);
+                  force[u][0] += att * (dx / d);
+                  force[u][1] += att * (dy / d);
+                  force[v][0] -= att * (dx / d);
+                  force[v][1] -= att * (dy / d);
+                }
+              }
+
+              // apply forces
+              for (const v in tree) {
+                pos[v][0] += force[v][0];
+                pos[v][1] += force[v][1];
+              }
+
+              renderer.render(scene, camera);
+
+              const t = performance.now() * 0.001;
+              // update nodes (position + shader)
+              for (const id in nodes) {
+                const node = nodes[id];
+                node.material.uniforms.time.value = t;
+                node.position.x = pos[id][0] + Math.sin(t * 5) * 1.0;
+                node.position.y = pos[id][1] + Math.cos(t * 5) * 1.0;
+              }
+
+              // update field plane uniforms
+              let i = 0;
+              for (const id in nodes) {
+                if (i >= maxNodes) break;
+                const node = nodes[id];
+                if (!node) continue; // skip undefined
+                fieldPlane.material.uniforms.nodes.value[i].copy(node.position);
+                i++;
+              }
+              fieldPlane.material.uniforms.nodeCount.value = i;
+
+              // render
+              renderer.render(scene, camera);
+
+              for (const edge of edges) {
+                edge.material.uniforms.time.value = performance.now() * 0.001;
+              }
+
+              updateVisualPositions();
+
+              it++;
+              requestAnimationFrame(relaxStep);
+            }
+
+            relaxStep();
+            break;
+          }
+
+          case "end": {
+            const [_, cid, pre, post] = args;
+            const id = String(cid);
+            ctx[id] = "SUCCESS"; // or FAILURE if needed
+            break;
+          }
+        }
+      }
+
+      // --- public handleForce (enqueue nodes sequentially) ---
+      function handleForce(args) {
+        if (args[0] === "node") {
+          enqueueNode(args);
+        } else {
+          // start/end can be immediate
+          handleForceImmediate(args);
+        }
+      }
+
+      // ===============================
+      // Render Loop
+      // ===============================
+      function animate() {
+        requestAnimationFrame(animate);
+        scene.rotation.z += 0.0007;
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      handle = handleForce;
+
+      const pre = [];
+      const post = new Imp(
+        new And(
+          new Imp(new At("A"), new At("B")),
+          new Imp(new At("C"), new At("D"))
+        ),
+        new Imp(
+          new Or(new At("A"), new At("C")),
+          new Or(new At("B"), new At("D"))
+        )
+      );
+
+      //   const capturer = new CCapture({ format: "webm", framerate: 24 });
+      //   let capturing = true;
+      //   capturer.start();
+
+      runProver(pre, post);
+
+      //   capturer.stop();
+      //   capturer.save();
+    </script>
+  </body>
+</html>
