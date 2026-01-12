@@ -22,6 +22,9 @@
     // Stanje grafa
     let tree = {};
     let ctx = {};
+    let nctx = {};
+    let octx = {};
+    let end = {};
     let pos = {};
     let nid = 0;
 
@@ -277,9 +280,7 @@
     const edges = [];
 
     // funkcija za dodajanje vozlišč
-    function addNodeVisual(id) {
-      const geometry = new THREE.SphereGeometry(2, 24, 24);
-
+    function addNodeVisual(id, geometry = new THREE.SphereGeometry(2, 24, 24)) {
       const material = new THREE.ShaderMaterial({
         uniforms: {
           time: { value: 0 },
@@ -340,19 +341,41 @@
       edges.push(line);
     }
 
+    // funkcija za izračun tipov vozlišč
+    function computeNodeTypes(id = "start") {
+      if (end[id] === "SUCCESS" || end[id] === "FAILURE") {
+        nctx[id] = end[id];
+      }
+      for (const child of tree[id]) {
+        if (octx[child] === "more") {
+          nctx[id] = "both";
+        }
+        if (octx[child] === "one") {
+          nctx[id] = "one";
+        }
+        if (octx[child] === "try") {
+          nctx[id] = "try";
+        }
+        computeNodeTypes(child);
+      }
+    }
+
+    function getColor(id) {
+      if (nctx[id] === "both") return new THREE.Color(0xffff00);
+      if (nctx[id] === "one") return new THREE.Color(0xaaaaaa);
+      if (nctx[id] === "try") return new THREE.Color(0xff9900);
+      if (nctx[id] === "SUCCESS") return new THREE.Color(0x2ce059);
+      if (nctx[id] === "FAILURE") return new THREE.Color(0xff3333);
+
+      return new THREE.Color(0x3399ff);
+    }
+
     // funkcija za posodabljanje pozicij vizualnih elementov
     function updateVisuals() {
       // posodobi pozicije vozlišč
       for (const id in nodes) {
         nodes[id].position.set(pos[id][0], pos[id][1], pos[id][2]);
-        // not too bright green forblack backgroud
-        nodes[id].material.uniforms.color.value = new THREE.Color(0x2ce059);
-        // (
-        // ctx[id] === "OK"
-        //   ? new THREE.Color(0x33ff66)
-        //   : ctx[id] === "SUCCESS"
-        //     ? new THREE.Color(0x3399ff)
-        //     : new THREE.Color(0xff3333));
+        nodes[id].material.uniforms.color.value = getColor(id);
       }
 
       // posodobi pozicije povezav
@@ -396,22 +419,24 @@
 
     function handleForceImmediate(args, onFinish) {
       const [event] = args;
-
+      
       switch (event) {
         case "start": {
           const [_, pre, post] = args;
           tree = { start: [] };
           pos = { start: [0, 0, 0] };
           ctx = {};
-
-          addNodeVisual("start");
+          nctx = {};
+          
+          addNodeVisual("start", new THREE.BoxGeometry(4, 4, 4));
           break;
         }
-
+        
         case "node": {
           const [_, typ, pid, cid, pre, post] = args;
           const id = String(cid);
           const parent = String(pid);
+          octx[args[3]] = args[1];
 
           tree[parent] = tree[parent] || [];
           tree[parent].push(id);
@@ -427,7 +452,7 @@
             pos[parent][2] + radius * (Math.random() - 0.5),
           ];
 
-          addNodeVisual(id, 0xff4444);
+          addNodeVisual(id);
           addEdgeVisual(parent, id);
 
           // relaksacija
@@ -499,7 +524,8 @@
               edge.material.uniforms.time.value = performance.now() * 0.001;
             }
 
-            //   propagateState("start");
+            computeNodeTypes();
+            // console.log(nctx, octx, end);
             updateVisuals();
 
             it++;
@@ -512,15 +538,11 @@
 
         case "end": {
           const [_, cid, pre, post] = args;
-
-          const node = nodes[cid];
-          if (!node) break;
-          console.log("Evaluating node", cid, pre, post);
-
+          
           if (post instanceof At && pre.some(p => eq(p, post))) {
-            ctx[cid] = "SUCCESS";
+            end[cid] = "SUCCESS";
           } else {
-            ctx[cid] = "FAILURE";
+            end[cid] = "FAILURE";
           }
           break;
         }
