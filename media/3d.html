@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>3D</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: black;
+    }
+  </style>
+</head>
+
+<body>
+  <script src="https://cdn.jsdelivr.net/npm/ccapture.js@1.1.0/build/CCapture.all.min.js"></script>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.161/build/three.module.js";
+
+    // Stanje grafa
+    let tree = {};
+    let ctx = {};
+    let pos = {};
+    let nid = 0;
+
+    let sc = 0.7;
+    let Crep = 20 * sc;
+    let Cspring = 10 * sc;
+    let l = 20 * sc;
+
+    // Konstruktorji logičnih izrazov
+    class Op { }
+    class And extends Op {
+      constructor(fst, snd) {
+        super();
+        this.fst = fst;
+        this.snd = snd;
+      }
+    }
+    class Or extends Op {
+      constructor(fst, snd) {
+        super();
+        this.fst = fst;
+        this.snd = snd;
+      }
+    }
+    class Imp extends Op {
+      constructor(fst, snd) {
+        super();
+        this.fst = fst;
+        this.snd = snd;
+      }
+    }
+    class At extends Op {
+      constructor(fst) {
+        super();
+        this.fst = fst;
+      }
+    }
+    class F extends Op { }
+
+    // Pomožne funkcije za logične izraze
+    function eq(a, b) {
+      if (a instanceof At && b instanceof At) return a.fst === b.fst;
+      if (a instanceof F && b instanceof F) return true;
+
+      if (a.constructor !== b.constructor) return false;
+      return eq(a.fst, b.fst) && eq(a.snd, b.snd);
+    }
+
+    function containsOp(list, x) {
+      return list.some((v) => eq(v, x));
+    }
+
+    let handle = () => { };
+
+    // pomožna funkcija za oddajanje dogodkov
+    function emit(...args) {
+      handle(args);
+    }
+
+    // Dokazovalnik
+    function prove(typ, pid, pre, post) {
+      nid += 1;
+      const cid = nid;
+
+      emit("node", typ, pid, cid, pre.slice(), post);
+
+      for (let _ = 0; _ < pre.length; _++) {
+        const head = pre[0];
+        const rest = pre.slice(1);
+
+        // [At(x), *rest] if At(x)==post
+        if (head instanceof At && eq(head, post)) {
+          emit("end", cid, [head, ...rest], post);
+          return true;
+        }
+
+        // [F(), *rest]
+        if (head instanceof F) {
+          emit("end", cid, [head, ...rest], post);
+          return true;
+        }
+
+        // [Or(x,y), *rest]
+        if (head instanceof Or) {
+          const { fst: x, snd: y } = head;
+          if (
+            prove("more", cid, [x, ...rest], post) &&
+            prove("last", cid, [y, ...rest], post)
+          )
+            return true;
+        }
+
+        // [And(x,y), *rest]
+        if (head instanceof And) {
+          const { fst: x, snd: y } = head;
+          if (prove("one", cid, [x, y, ...rest], post)) return true;
+        }
+
+        // [Imp(At(a), b), *rest] if At(a) in rest
+        if (head instanceof Imp && head.fst instanceof At) {
+          const a = head.fst.fst;
+          const b = head.snd;
+
+          if (containsOp(rest, new At(a))) {
+            if (prove("one", cid, [b, ...rest], post)) return true;
+          }
+        }
+
+        // Imp(And(c,d), b)
+        if (head instanceof Imp && head.fst instanceof And) {
+          const { fst: c, snd: d } = head.fst;
+          const b = head.snd;
+          if (prove("one", cid, [new Imp(c, new Imp(d, b)), ...rest], post))
+            return true;
+        }
+
+        // Imp(Or(c,d), b)
+        if (head instanceof Imp && head.fst instanceof Or) {
+          const { fst: c, snd: d } = head.fst;
+          const b = head.snd;
+          if (
+            prove("one", cid, [new Imp(c, b), new Imp(d, b), ...rest], post)
+          )
+            return true;
+        }
+
+        // Imp(Imp(c,d), b)
+        if (head instanceof Imp && head.fst instanceof Imp) {
+          const { fst: c, snd: d } = head.fst;
+          const b = head.snd;
+          if (
+            prove("more", cid, [new Imp(d, b), ...rest], new Imp(c, d)) &&
+            prove("last", cid, [b, ...rest], post)
+          )
+            return true;
+        }
+
+        // rotiraj pre
+        pre = rest.concat([head]);
+      }
+
+      // matchanje na post
+      if (post instanceof At) {
+        emit("end", cid, pre.slice(), post);
+        return containsOp(pre, post);
+      }
+
+      if (post instanceof And) {
+        if (
+          prove("more", cid, pre.slice(), post.fst) &&
+          prove("last", cid, pre.slice(), post.snd)
+        )
+          return true;
+      }
+
+      if (post instanceof Or) {
+        if (
+          prove("try", cid, pre.slice(), post.fst) ||
+          prove("last", cid, pre.slice(), post.snd)
+        )
+          return true;
+      }
+
+      if (post instanceof Imp) {
+        if (prove("one", cid, [...pre, post.fst], post.snd)) return true;
+      }
+
+      return false;
+    }
+
+    // pigeonhole generator
+
+    function orAll(arr) {
+      if (arr.length === 0) return new F();
+      return arr.reduce((a, b) => new Or(a, b));
+    }
+
+    function andAll(arr) {
+      if (arr.length === 0) return new F();
+      return arr.reduce((a, b) => new And(a, b));
+    }
+
+    function P(i, j) {
+      return new At(`P(${i},${j})`);
+    }
+
+    function pigeonholeProposition(pigeons, cells) {
+      if (pigeons <= cells) {
+        return new F();
+      }
+
+      // vsak golob je v neki celici
+      const pigeonPlacements = [];
+      for (let i = 0; i < pigeons; i++) {
+        const choices = [];
+        for (let j = 0; j < cells; j++) {
+          choices.push(P(i, j));
+        }
+        pigeonPlacements.push(orAll(choices));
+      }
+      const allPigeonsPlaced = andAll(pigeonPlacements);
+
+      // neka celica ima vsaj dva goloba
+      const collisions = [];
+      for (let j = 0; j < cells; j++) {
+        for (let i = 0; i < pigeons; i++) {
+          for (let k = i + 1; k < pigeons; k++) {
+            collisions.push(
+              new And(P(i, j), P(k, j))
+            );
+          }
+        }
+      }
+      const someCollision = orAll(collisions);
+
+      return new Imp(allPigeonsPlaced, someCollision);
+    }
+
+    function runProver(pre, post) {
+      nid = 0;
+      emit("start", pre.slice(), post);
+      console.log("Prover result:", prove(0, "start", pre.slice(), post));
+    }
+
+    // THREE setup
+    // ustvari sceno
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x333333);
+
+    const camera = new THREE.PerspectiveCamera(
+      50,
+      innerWidth / innerHeight,
+      0.1,
+      10000
+    );
+    camera.position.set(0, 0, 200);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(innerWidth, innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    window.addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    // Field plane geometry
+    const planeGeo = new THREE.PlaneGeometry(1000, 1000, 256, 256);
+
+    // vizualizacija
+    const nodes = {};
+    const edges = [];
+
+    // funkcija za dodajanje vozlišč
+    function addNodeVisual(id) {
+      const geometry = new THREE.SphereGeometry(2, 24, 24);
+
+      const material = new THREE.ShaderMaterial({
+        uniforms: {
+          time: { value: 0 },
+          scale: { value: 1 },
+          color: { value: new THREE.Color(0x33ff66) },
+        },
+        vertexShader: `
+            uniform float time;
+            uniform float scale;
+            void main() {
+                vec3 pos = position;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+            }
+        `,
+        fragmentShader: `
+            uniform float time;
+            uniform vec3 color;
+            void main() {
+                gl_FragColor = vec4(color, 1.0);
+            }
+        `,
+      });
+
+      const mesh = new THREE.Mesh(geometry, material.clone());
+
+      mesh.position.set(pos[id][0], pos[id][1], pos[id][2]);
+
+      scene.add(mesh);
+      nodes[id] = mesh;
+    }
+
+    // funkcija za dodajanje povezav
+    function addEdgeVisual(a, b) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute(
+        "position",
+        new THREE.BufferAttribute(new Float32Array(6), 3)
+      );
+
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { time: { value: 0 } },
+        vertexShader: `
+            void main() {
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+            }`,
+        fragmentShader: `
+            uniform float time;
+            void main() {
+                gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+            }`,
+        transparent: true,
+      });
+
+      const line = new THREE.Line(geo, mat);
+      line.userData.a = a;
+      line.userData.b = b;
+      scene.add(line);
+      edges.push(line);
+    }
+
+    // funkcija za posodabljanje pozicij vizualnih elementov
+    function updateVisuals() {
+      // posodobi pozicije vozlišč
+      for (const id in nodes) {
+        nodes[id].position.set(pos[id][0], pos[id][1], pos[id][2]);
+        // not too bright green forblack backgroud
+        nodes[id].material.uniforms.color.value = new THREE.Color(0x2ce059);
+        // (
+        // ctx[id] === "OK"
+        //   ? new THREE.Color(0x33ff66)
+        //   : ctx[id] === "SUCCESS"
+        //     ? new THREE.Color(0x3399ff)
+        //     : new THREE.Color(0xff3333));
+      }
+
+      // posodobi pozicije povezav
+      edges.forEach((line) => {
+        const a = pos[line.userData.a];
+        const b = pos[line.userData.b];
+        const arr = line.geometry.attributes.position.array;
+        arr[0] = a[0];
+        arr[1] = a[1];
+        arr[2] = a[2];
+        arr[3] = b[0];
+        arr[4] = b[1];
+        arr[5] = b[2];
+        line.geometry.attributes.position.needsUpdate = true;
+      });
+    }
+
+    // event handler
+    const eventQueue = [];
+    let queueRunning = false;
+
+    function enqueueEvent(args) {
+      eventQueue.push(args);
+      if (!queueRunning) processQueue();
+    }
+
+    function processQueue() {
+      if (eventQueue.length === 0) {
+        queueRunning = false;
+        return;
+      }
+      queueRunning = true;
+
+      const args = eventQueue.shift();
+      handleForceImmediate(args, processQueue);
+    }
+
+    function clamp(num, min, max) {
+      return Math.min(Math.max(num, min), max);
+    }
+
+    function handleForceImmediate(args, onFinish) {
+      const [event] = args;
+
+      switch (event) {
+        case "start": {
+          const [_, pre, post] = args;
+          tree = { start: [] };
+          pos = { start: [0, 0, 0] };
+          ctx = {};
+
+          addNodeVisual("start");
+          break;
+        }
+
+        case "node": {
+          const [_, typ, pid, cid, pre, post] = args;
+          const id = String(cid);
+          const parent = String(pid);
+
+          tree[parent] = tree[parent] || [];
+          tree[parent].push(id);
+          tree[id] = [];
+
+          ctx[id] = "OK";
+
+          // začetna postavitev novega vozlišča
+          const radius = l;
+          pos[id] = [
+            pos[parent][0] + radius * (Math.random() - 0.5),
+            pos[parent][1] + radius * (Math.random() - 0.5),
+            pos[parent][2] + radius * (Math.random() - 0.5),
+          ];
+
+          addNodeVisual(id, 0xff4444);
+          addEdgeVisual(parent, id);
+
+          // relaksacija
+          let it = 0;
+          const maxIt = 60;
+
+          function relaxStep() {
+            if (it >= maxIt) {
+              if (onFinish) onFinish();
+              return;
+            }
+
+            // izračunaj odbojne sile
+            let force = {};
+            for (const v in tree) {
+              force[v] = [0, 0, 0];
+              for (const u in tree) {
+                if (
+                  u !== v &&
+                  u !== id
+                ) {
+                  const dx = pos[v][0] - pos[u][0];
+                  const dy = pos[v][1] - pos[u][1];
+                  const dz = pos[v][2] - pos[u][2];
+                  const d = Math.sqrt(dx * dx + dy * dy + dz * dz) + 0.001;
+                  const rep = Crep / (d * d);
+                  force[v][0] += rep * (dx / d);
+                  force[v][1] += rep * (dy / d);
+                  force[v][2] += rep * (dz / d);
+                }
+              }
+            }
+
+            // izračunaj privlačne sile
+            for (const v in tree) {
+              for (const u of tree[v]) {
+                const dx = pos[v][0] - pos[u][0];
+                const dy = pos[v][1] - pos[u][1];
+                const dz = pos[v][2] - pos[u][2];
+                const d = Math.sqrt(dx * dx + dy * dy + dz * dz) + 0.001;
+                const att = Cspring * Math.log(d / l);
+                force[u][0] += att * (dx / d);
+                force[u][1] += att * (dy / d);
+                force[u][2] += att * (dz / d);
+                force[v][0] -= att * (dx / d);
+                force[v][1] -= att * (dy / d);
+                force[v][2] -= att * (dz / d);
+              }
+            }
+
+            // apliciraj sile
+            for (const v in tree) {
+              pos[v][0] += clamp(force[v][0], -1, 1);
+              pos[v][1] += clamp(force[v][1], -1, 1);
+              pos[v][2] += clamp(force[v][2], -1, 1);
+            }
+
+            const t = performance.now() * 0.001;
+            // posodobi vozlišča
+            for (const id in nodes) {
+              const node = nodes[id];
+              node.material.uniforms.time.value = t;
+              node.position.x = pos[id][0];
+              node.position.y = pos[id][1];
+              node.position.z = pos[id][2];
+            }
+
+            for (const edge of edges) {
+              edge.material.uniforms.time.value = performance.now() * 0.001;
+            }
+
+            //   propagateState("start");
+            updateVisuals();
+
+            it++;
+            requestAnimationFrame(relaxStep);
+          }
+
+          relaxStep();
+          break;
+        }
+
+        case "end": {
+          const [_, cid, pre, post] = args;
+
+          const node = nodes[cid];
+          if (!node) break;
+          console.log("Evaluating node", cid, pre, post);
+
+          if (post instanceof At && pre.some(p => eq(p, post))) {
+            ctx[cid] = "SUCCESS";
+          } else {
+            ctx[cid] = "FAILURE";
+          }
+          break;
+        }
+      }
+    }
+
+    function handleForce(args) {
+      if (args[0] === "node") {
+        enqueueEvent(args);
+      } else {
+        handleForceImmediate(args);
+      }
+    }
+
+    // render loop
+    function animate() {
+      requestAnimationFrame(animate);
+
+      scene.rotation.z += 0.0007;
+      scene.rotation.x += 0.0007;
+      camera.position.y += 0.0005;
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    handle = handleForce;
+
+    runProver([], pigeonholeProposition(4, 3));
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>RGB</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: black;
+        }
+    </style>
+</head>
+
+<body>
+    <script src="https://cdn.jsdelivr.net/npm/ccapture.js@1.1.0/build/CCapture.all.min.js"></script>
+
+    <script type="module">
+        import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.161/build/three.module.js";
+
+        // Stanje grafa
+        let tree = {};
+        let ctx = {};
+        let pos = {};
+        let nid = 0;
+
+        let Crep = 10;
+        let Cspring = 5;
+        let l = 10;
+
+        // Konstruktorji logičnih izrazov
+        class Op { }
+        class And extends Op {
+            constructor(fst, snd) {
+                super();
+                this.fst = fst;
+                this.snd = snd;
+            }
+        }
+        class Or extends Op {
+            constructor(fst, snd) {
+                super();
+                this.fst = fst;
+                this.snd = snd;
+            }
+        }
+        class Imp extends Op {
+            constructor(fst, snd) {
+                super();
+                this.fst = fst;
+                this.snd = snd;
+            }
+        }
+        class At extends Op {
+            constructor(fst) {
+                super();
+                this.fst = fst;
+            }
+        }
+        class F extends Op { }
+
+        // Pomožne funkcije za logične izraze
+        function eq(a, b) {
+            if (a instanceof At && b instanceof At) return a.fst === b.fst;
+            if (a instanceof F && b instanceof F) return true;
+
+            if (a.constructor !== b.constructor) return false;
+            return eq(a.fst, b.fst) && eq(a.snd, b.snd);
+        }
+
+        function containsOp(list, x) {
+            return list.some((v) => eq(v, x));
+        }
+
+        let handle = () => { };
+
+        // pomožna funkcija za oddajanje dogodkov
+        function emit(...args) {
+            handle(args);
+        }
+
+        // Dokazovalnik
+        function prove(typ, pid, pre, post) {
+            nid += 1;
+            const cid = nid;
+
+            emit("node", typ, pid, cid, pre.slice(), post);
+
+            for (let _ = 0; _ < pre.length; _++) {
+                const head = pre[0];
+                const rest = pre.slice(1);
+
+                // [At(x), *rest] if At(x)==post
+                if (head instanceof At && eq(head, post)) {
+                    emit("end", cid, [head, ...rest], post);
+                    return true;
+                }
+
+                // [F(), *rest]
+                if (head instanceof F) {
+                    emit("end", cid, [head, ...rest], post);
+                    return true;
+                }
+
+                // [Or(x,y), *rest]
+                if (head instanceof Or) {
+                    const { fst: x, snd: y } = head;
+                    if (
+                        prove("more", cid, [x, ...rest], post) &&
+                        prove("last", cid, [y, ...rest], post)
+                    )
+                        return true;
+                }
+
+                // [And(x,y), *rest]
+                if (head instanceof And) {
+                    const { fst: x, snd: y } = head;
+                    if (prove("one", cid, [x, y, ...rest], post)) return true;
+                }
+
+                // [Imp(At(a), b), *rest] if At(a) in rest
+                if (head instanceof Imp && head.fst instanceof At) {
+                    const a = head.fst.fst;
+                    const b = head.snd;
+
+                    if (containsOp(rest, new At(a))) {
+                        if (prove("one", cid, [b, ...rest], post)) return true;
+                    }
+                }
+
+                // Imp(And(c,d), b)
+                if (head instanceof Imp && head.fst instanceof And) {
+                    const { fst: c, snd: d } = head.fst;
+                    const b = head.snd;
+                    if (prove("one", cid, [new Imp(c, new Imp(d, b)), ...rest], post))
+                        return true;
+                }
+
+                // Imp(Or(c,d), b)
+                if (head instanceof Imp && head.fst instanceof Or) {
+                    const { fst: c, snd: d } = head.fst;
+                    const b = head.snd;
+                    if (
+                        prove("one", cid, [new Imp(c, b), new Imp(d, b), ...rest], post)
+                    )
+                        return true;
+                }
+
+                // Imp(Imp(c,d), b)
+                if (head instanceof Imp && head.fst instanceof Imp) {
+                    const { fst: c, snd: d } = head.fst;
+                    const b = head.snd;
+                    if (
+                        prove("more", cid, [new Imp(d, b), ...rest], new Imp(c, d)) &&
+                        prove("last", cid, [b, ...rest], post)
+                    )
+                        return true;
+                }
+
+                // rotiraj pre
+                pre = rest.concat([head]);
+            }
+
+            // matchanje na post
+            if (post instanceof At) {
+                emit("end", cid, pre.slice(), post);
+                return containsOp(pre, post);
+            }
+
+            if (post instanceof And) {
+                if (
+                    prove("more", cid, pre.slice(), post.fst) &&
+                    prove("last", cid, pre.slice(), post.snd)
+                )
+                    return true;
+            }
+
+            if (post instanceof Or) {
+                if (
+                    prove("try", cid, pre.slice(), post.fst) ||
+                    prove("last", cid, pre.slice(), post.snd)
+                )
+                    return true;
+            }
+
+            if (post instanceof Imp) {
+                if (prove("one", cid, [...pre, post.fst], post.snd)) return true;
+            }
+
+            return false;
+        }
+
+        // pigeonhole generator
+
+        function orAll(arr) {
+            if (arr.length === 0) return new F();
+            return arr.reduce((a, b) => new Or(a, b));
+        }
+
+        function andAll(arr) {
+            if (arr.length === 0) return new F();
+            return arr.reduce((a, b) => new And(a, b));
+        }
+
+        function P(i, j) {
+            return new At(`P(${i},${j})`);
+        }
+
+        function pigeonholeProposition(pigeons, cells) {
+            if (pigeons <= cells) {
+                return new F();
+            }
+
+            // vsak golob je v neki celici
+            const pigeonPlacements = [];
+            for (let i = 0; i < pigeons; i++) {
+                const choices = [];
+                for (let j = 0; j < cells; j++) {
+                    choices.push(P(i, j));
+                }
+                pigeonPlacements.push(orAll(choices));
+            }
+            const allPigeonsPlaced = andAll(pigeonPlacements);
+
+            // neka celica ima vsaj dva goloba
+            const collisions = [];
+            for (let j = 0; j < cells; j++) {
+                for (let i = 0; i < pigeons; i++) {
+                    for (let k = i + 1; k < pigeons; k++) {
+                        collisions.push(
+                            new And(P(i, j), P(k, j))
+                        );
+                    }
+                }
+            }
+            const someCollision = orAll(collisions);
+
+            return new Imp(allPigeonsPlaced, someCollision);
+        }
+
+        function runProver(pre, post) {
+            nid = 0;
+            emit("start", pre.slice(), post);
+            console.log("Prover result:", prove(0, "start", pre.slice(), post));
+        }
+
+        // THREE setup
+        // ustvari sceno
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x000000);
+
+        // ustvari kamero
+        const camera = new THREE.PerspectiveCamera(
+            50,
+            innerWidth / innerHeight,
+            0.1,
+            10000
+        );
+        camera.position.set(0, 0, 200);
+
+        // ustvari renderer
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(innerWidth, innerHeight);
+        document.body.appendChild(renderer.domElement);
+        
+        window.addEventListener("resize", () => {
+            camera.aspect = innerWidth / innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(innerWidth, innerHeight);
+        });
+
+        // ustvari field
+        const maxNodes = 1000;
+
+        const planeGeo = new THREE.PlaneGeometry(1000, 1000, 256, 256);
+
+        const planeMat = new THREE.ShaderMaterial({
+            uniforms: {
+                nodes_red: { value: [] },
+                nodes_green: { value: [] },
+                nodes_blue: { value: [] },
+                nodeCount_red: { value: 0 },
+                nodeCount_green: { value: 0 },
+                nodeCount_blue: { value: 0 },
+                time: { value: 0 },
+            },
+            vertexShader: `
+                varying vec3 vPos;
+                void main() {
+                    vPos = position;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 nodes_red[${maxNodes}];
+                uniform vec3 nodes_green[${maxNodes}];
+                uniform vec3 nodes_blue[${maxNodes}];
+                uniform int nodeCount_red;
+                uniform int nodeCount_green;
+                uniform int nodeCount_blue;
+                uniform float time;
+                varying vec3 vPos;
+
+                void main() {
+                    float intensity_red = 0.3;
+                    float intensity_green = 0.3;
+                    float intensity_blue = 0.3;
+
+                    for (int i=0; i<${maxNodes}; i++) {
+                        if (i >= nodeCount_red) break;
+                        float r = length(vPos.xy - nodes_red[i].xy);
+                        intensity_red += 1.0 / (r + 0.1);   // 1/r falloff
+                    }
+                    for (int i=0; i<${maxNodes}; i++) {
+                        if (i >= nodeCount_green) break;
+                        float r = length(vPos.xy - nodes_green[i].xy);
+                        intensity_green += 1.0 / (r + 0.1);   // 1/r falloff
+                    }
+                    for (int i=0; i<${maxNodes}; i++) {
+                        if (i >= nodeCount_blue) break;
+                        float r = length(vPos.xy - nodes_blue[i].xy);
+                        intensity_blue += 1.0 / (r + 0.1);   // 1/r falloff
+                    }
+
+                    intensity_red = clamp(pow(intensity_red*1.2,1.5), 0.0, 0.7);
+                    intensity_green = clamp(pow(intensity_green*0.8,1.5), 0.0, 0.55);
+                    intensity_blue = clamp(pow(intensity_blue*1.2,1.5), 0.0, 0.8);
+                    
+                    gl_FragColor = vec4(intensity_red, intensity_green, intensity_blue, 1.0); // color mapping
+                }
+            `,
+            transparent: false,
+        });
+        const fieldPlane = new THREE.Mesh(planeGeo, planeMat);
+        fieldPlane.position.z = -1;
+        function makeNodeArray() {
+            const arr = [];
+            for (let i = 0; i < maxNodes; i++) {
+                arr.push(new THREE.Vector3());
+            }
+            return arr;
+        }
+
+        fieldPlane.material.uniforms.nodes_red.value = makeNodeArray();
+        fieldPlane.material.uniforms.nodes_green.value = makeNodeArray();
+        fieldPlane.material.uniforms.nodes_blue.value = makeNodeArray();
+
+        scene.add(fieldPlane);
+
+        // vizualizacija dokazovanja
+        const nodes = {};
+        const edges = {};
+
+        const material = {
+            0: new THREE.ShaderMaterial({
+                uniforms: {
+                    time: { value: 0 },
+                    color: { value: new THREE.Color(0xff4444) },
+                    scale: { value: 1 },
+                },
+                vertexShader: `
+                uniform float time;
+                uniform float scale;
+                void main() {
+                    // do not override the node position
+                    vec3 pos = position; // local geometry
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+                }
+            `,
+                fragmentShader: `
+                uniform float time;
+                void main() {
+                    // float hue = mod(time*0.2, 1.0);
+                    // float r = abs(sin(hue * 6.2831));
+                    // float g = abs(sin((hue + 0.333) * 6.2831));
+                    // float b = abs(sin((hue + 0.666) * 6.2831));
+                    gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+                }
+            `,
+            }),
+            1: new THREE.ShaderMaterial({
+                uniforms: {
+                    time: { value: 0 },
+                    color: { value: new THREE.Color(0xff4444) },
+                    scale: { value: 1 },
+                },
+                vertexShader: `
+                uniform float time;
+                uniform float scale;
+                void main() {
+                    vec3 pos = position;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+                }
+            `,
+                fragmentShader: `
+                uniform float time;
+                void main() {
+                    gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
+                }
+            `,
+            }),
+            2: new THREE.ShaderMaterial({
+                uniforms: {
+                    time: { value: 0 },
+                    color: { value: new THREE.Color(0xff4444) },
+                    scale: { value: 1 },
+                },
+                vertexShader: `
+                uniform float time;
+                uniform float scale;
+                void main() {
+                    vec3 pos = position;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+                }
+            `,
+                fragmentShader: `
+                uniform float time;
+                void main() {
+                    gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
+                }
+            `,
+            })
+        };
+
+        // funkcija za dodajanje vozlišč
+        function addNodeVisual(prover, id) {
+            const geometry = new THREE.CircleGeometry(1, 24);
+
+            const mesh = new THREE.Mesh(geometry, material[prover]);
+            mesh.renderOrder = 2;
+
+            mesh.position.set(pos[prover][id][0], pos[prover][id][1], 0);
+
+            scene.add(mesh);
+            nodes[prover][id] = mesh;
+        }
+
+        // funkcija za dodajanje povezav
+        function addEdgeVisual(prover, a, b) {
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute(
+                "position",
+                new THREE.BufferAttribute(new Float32Array(6), 3)
+            );
+
+            const mat = new THREE.ShaderMaterial({
+                uniforms: { time: { value: 0 } },
+                vertexShader: `
+                void main() {
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+                }`,
+                fragmentShader: `
+                uniform float time;
+                void main() {
+                    // gl_FragColor = vec4(vec3(0.5 + 0.5*sin(time*5.0)), 1.0);
+                    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+                }`,
+                transparent: true,
+            });
+            
+            const line = new THREE.Line(geo, mat);
+            line.renderOrder = 1;
+            line.userData.a = a;
+            line.userData.b = b;
+            line.position.z = -0.1;
+            scene.add(line);
+            edges[prover].push(line);
+        }
+
+        // funkcija za posodabljanje pozicij vizualnih elementov
+        function updateVisualPositions(prover) {
+            // posodobi pozicije vozlišč
+            for (const id in nodes[prover]) {
+                nodes[prover][id].position.set(pos[prover][id][0], pos[prover][id][1], 0);
+            }
+
+            // posodobi pozicije povezav
+            if (!edges[prover]) return;
+            edges[prover].forEach((line) => {
+                const a = pos[prover][line.userData.a];
+                const b = pos[prover][line.userData.b];
+                const arr = line.geometry.attributes.position.array;
+                arr[0] = a[0];
+                arr[1] = a[1];
+                arr[2] = 0;
+                arr[3] = b[0];
+                arr[4] = b[1];
+                arr[5] = 0;
+                line.geometry.attributes.position.needsUpdate = true;
+            });
+        }
+
+        // event handler
+        const eventQueue = [[],[], []];
+
+        function enqueueEvent(i, args) {
+            eventQueue[i].push(args);
+        }
+
+        function processQueue(i) {
+            if (eventQueue[i].length === 0) {
+                return;
+            }
+
+            const args = eventQueue[i].shift();
+            handleForceImmediate(i, args, () => processQueue(i));
+        }
+
+        function processQueues() {
+            if (!nodes[0]) {
+                nodes[0] = {};
+                edges[0] = [];
+            }
+            if (!nodes[1]) {
+                nodes[1] = {};
+                edges[1] = [];
+            }
+            if (!nodes[2]) {
+                nodes[2] = {};
+                edges[2] = [];
+            }
+
+            const args0 = eventQueue[0].shift();
+            const args1 = eventQueue[1].shift();
+            const args2 = eventQueue[2].shift();
+
+            handleForceImmediate3(args0, args1, args2, processQueues);
+        }
+
+        function orient(ax, ay, bx, by, cx, cy) {
+            return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+        }
+
+        function segmentsIntersect(a, b, c, d) {
+            const o1 = orient(a[0], a[1], b[0], b[1], c[0], c[1]);
+            const o2 = orient(a[0], a[1], b[0], b[1], d[0], d[1]);
+            const o3 = orient(c[0], c[1], d[0], d[1], a[0], a[1]);
+            const o4 = orient(c[0], c[1], d[0], d[1], b[0], b[1]);
+
+            return o1 * o2 < 0 && o3 * o4 < 0;
+        }
+
+        function newEdgeIntersectsExisting(prover, parent, id) {
+            const A = pos[prover][parent];
+            const B = pos[prover][id];
+
+            for (const edge of edges[prover]) {
+                const u = edge.userData.a;
+                const v = edge.userData.b;
+
+                if (u === parent || v === parent) continue;
+
+                const C = pos[prover][u];
+                const D = pos[prover][v];
+
+                if (segmentsIntersect(A, B, C, D)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function clamp(num, min, max) {
+            return Math.min(Math.max(num, min), max);
+        }
+
+        function handleForceImmediate3(args0, args1, args2, onFinish) {
+            const argsl = [args0, args1, args2];
+
+            for (const [prover, args] of argsl.entries()) {
+                if (!args) continue;
+                const [_, typ, pid, cid, pre, post] = args;
+                const id = String(cid);
+                const parent = String(pid);
+
+                tree[prover][parent] = tree[prover][parent] || [];
+                tree[prover][parent].push(id);
+                tree[prover][id] = [];
+                ctx[prover][id] = "SUCCESS";
+
+
+                let tries = 0;
+                do {
+                    const angle = Math.random() * Math.PI * 2;
+                    const dist = 10;
+
+                    pos[prover][id] = [
+                        pos[prover][parent][0] + dist * Math.cos(angle),
+                        pos[prover][parent][1] + dist * Math.sin(angle),
+                    ];
+
+                    tries++;
+                } while (
+                    newEdgeIntersectsExisting(prover, parent, id) &&
+                    tries < 30
+                );
+
+
+                addNodeVisual(prover, id, 0xff4444);
+                addEdgeVisual(prover, parent, id);
+            }
+
+            // relaksacija
+            let it = 0;
+            const maxIt = 60;
+
+            function relaxStep() {
+                if (it >= maxIt) {
+                    if (onFinish) onFinish();
+                    return;
+                }
+
+                // izračunaj odbojne sile
+                let force = {};
+                for (const p in tree) {
+                    force[p] = {};
+                    for (const v in tree[p]) {
+                        force[p][v] = [0, 0];
+                        for (const u in tree[p]) {
+                            if (
+                                u !== v
+                            ) {
+                                const dx = pos[p][v][0] - pos[p][u][0];
+                                const dy = pos[p][v][1] - pos[p][u][1];
+                                const d = Math.sqrt(dx * dx + dy * dy) + 0.001;
+                                const rep = Crep / (d * d);
+                                force[p][v][0] += rep * (dx / d);
+                                force[p][v][1] += rep * (dy / d);
+                            }
+                        }
+                    }
+
+                    // izračunaj privlačne sile
+                    for (const v in tree[p]) {
+                        for (const u of tree[p][v]) {
+                            const dx = pos[p][v][0] - pos[p][u][0];
+                            const dy = pos[p][v][1] - pos[p][u][1];
+                            const d = Math.sqrt(dx * dx + dy * dy) + 0.001;
+                            const att = Cspring * Math.log(d / l);
+                            force[p][u][0] += att * (dx / d);
+                            force[p][u][1] += att * (dy / d);
+                            force[p][v][0] -= att * (dx / d);
+                            force[p][v][1] -= att * (dy / d);
+                        }
+                    }
+
+
+                    // apliciraj sile
+                    for (const v in tree[p]) {
+                        pos[p][v][0] += clamp(force[p][v][0], -1, 1);
+                        pos[p][v][1] += clamp(force[p][v][1], -1, 1);
+                    }
+
+                    const t = performance.now() * 0.001;
+                    // posodobi vozlišča
+                    for (const id in nodes[p]) {
+                        const node = nodes[p][id];
+                        node.material.uniforms.time.value = t;
+                        node.position.x = pos[p][id][0];
+                        node.position.y = pos[p][id][1];
+                    }
+
+                    // posodobi field
+                    let i = 0;
+                    for (const id in nodes[0]) {
+                        if (i >= maxNodes) break;
+                        const node = nodes[0][id];
+                        if (!node) continue;
+                        fieldPlane.material.uniforms.nodes_red.value[i].copy(node.position);
+                        i++;
+                    }
+                    fieldPlane.material.uniforms.nodeCount_red.value = i;
+
+                    i = 0;
+                    for (const id in nodes[1]) {
+                        if (i >= maxNodes) break;
+                        const node = nodes[1][id];
+                        if (!node) continue;
+                        fieldPlane.material.uniforms.nodes_green.value[i].copy(node.position);
+                        i++;
+                    }
+                    fieldPlane.material.uniforms.nodeCount_green.value = i;
+
+                    i = 0;
+                    for (const id in nodes[2]) {
+                        if (i >= maxNodes) break;
+                        const node = nodes[2][id];
+                        if (!node) continue;
+                        fieldPlane.material.uniforms.nodes_blue.value[i].copy(node.position);
+                        i++;
+                    }
+                    fieldPlane.material.uniforms.nodeCount_blue.value = i;
+
+                    if (edges[p] !== undefined) {
+                        for (const edge of edges[p]) {
+                            edge.material.uniforms.time.value = performance.now() * 0.001;
+                        }
+                    }
+
+                    updateVisualPositions(p);
+                }
+
+                it++;
+                requestAnimationFrame(relaxStep);
+            }
+
+            relaxStep();
+        }
+
+        let startPos = {
+            0: [-100, 0],
+            1: [-10, 100],
+            2: [100, -10],
+        };
+
+        function handleForce(i) {
+            return (args) => {
+                if (args[0] === "node") {
+                    enqueueEvent(i, args);
+                } else if (args[0] === "start") {
+                    tree[i] = { start: [] };
+                    pos[i] = { start: startPos[i] };
+                    ctx[i] = {};
+
+                    nodes[i] = {};
+                    edges[i] = [];
+
+                    addNodeVisual(i, "start");
+                }
+            };
+        }
+
+        // render loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            camera.position.x = 0;
+            camera.position.y = 50;
+            camera.position.z = clamp(camera.position.z + 0.1, 0, 500);
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // glavni program
+
+        eventQueue.push([]);
+        handle = handleForce(0);
+        runProver([], pigeonholeProposition(3, 2));
+
+        eventQueue.push([]);
+        handle = handleForce(1);
+        runProver([], pigeonholeProposition(3, 2));
+
+        eventQueue.push([]);
+        handle = handleForce(2);
+        runProver([], pigeonholeProposition(3, 2));
+
+        processQueues();
+    </script>
+</body>
+
+</html>
