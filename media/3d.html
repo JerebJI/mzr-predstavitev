@@ -260,7 +260,7 @@
       0.1,
       10000
     );
-    camera.position.set(0, 0, 200);
+    camera.position.set(0, 0, 300);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(innerWidth, innerHeight);
@@ -425,6 +425,8 @@
       if (nctx[id] === "try") return new THREE.Color(0xff9900);
       if (nctx[id] === "SUCCESS") return new THREE.Color(0x2ce059);
       if (nctx[id] === "FAILURE") return new THREE.Color(0xff3333);
+      if (id === "start" && ctx[1] === "SUCCESS") return new THREE.Color(0x2ce059);
+      if (id === "start" && ctx[1] === "FAILURE") return new THREE.Color(0xff3333);
 
       return new THREE.Color(0x3399ff);
     }
@@ -514,7 +516,7 @@
 
           // relaksacija
           let it = 0;
-          const maxIt = 60;
+          const maxIt = 20;
 
           function relaxStep() {
             if (it >= maxIt) {
@@ -583,6 +585,7 @@
 
             computeNodeTypes();
             propagateProofState();
+            console.log(ctx);
             updateVisuals();
 
             it++;
@@ -628,7 +631,7 @@
 
     handle = handleForce;
 
-    runProver([], pigeonholeProposition(4, 3));
+    runProver([], pigeonholeProposition(3, 2));
   </script>
 </body>
 
