@@ -321,15 +321,19 @@
       );
 
       const mat = new THREE.ShaderMaterial({
-        uniforms: { time: { value: 0 } },
+        uniforms: {
+          time: { value: 0 },
+          color: { value: "1.0, 1.0, 1.0" },
+        },
         vertexShader: `
             void main() {
                 gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
             }`,
         fragmentShader: `
             uniform float time;
+            uniform vec3 color;
             void main() {
-                gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+                gl_FragColor = vec4(color, 1.0);
             }`,
         transparent: true,
       });
@@ -358,6 +362,61 @@
         }
         computeNodeTypes(child);
       }
+    }
+
+    function propagateProofState(id = "start") {
+      if (end[id] === "SUCCESS" || end[id] === "FAILURE") {
+        ctx[id] = end[id];
+      }
+      for (const child of tree[id]) {
+        propagateProofState(child);
+      }
+      if (nctx[id] === "both") {
+        let succ = true;
+        let fail = false;
+        for (const child of tree[id]) {
+          if (ctx[child] !== "SUCCESS") succ = false;
+          if (ctx[child] === "FAILURE") fail = true;
+        } if (fail) {
+          ctx[id] = "FAILURE";
+        } else if (succ && tree[id].length == 2) {
+          ctx[id] = "SUCCESS";
+        }
+      }
+      if (nctx[id] === "one") {
+        let succ = true;
+        for (const child of tree[id]) {
+          if (ctx[child] !== "SUCCESS") succ = false;
+          if (ctx[child] === undefined) return;
+        }
+        ctx[id] = succ ? "SUCCESS" : "FAILURE";
+      }
+      if (nctx[id] === "try") {
+        let succ = false;
+        let fail = false;
+        for (const child of tree[id]) {
+          if (ctx[child] === "SUCCESS") succ = true;
+          if (ctx[child] !== "SUCCESS") fail = true;
+        }
+        if (succ) {
+          ctx[id] = "SUCCESS";
+          return;
+        } else if (fail && tree[id].length == 2) {
+          ctx[id] = "FAILURE";
+        }
+      }
+    }
+
+    function getEdgeColor(a, b) {
+      if (ctx[b] === "SUCCESS") return new THREE.Color(0x2ce059);
+      else if (ctx[b] === "FAILURE") return new THREE.Color(0xff3333);
+      else {
+        if (nctx[b] === "both") return new THREE.Color(0xffff00);
+        if (nctx[b] === "one") return new THREE.Color(0xaaaaaa);
+        if (nctx[b] === "try") return new THREE.Color(0xff9900);
+      }
+
+      return new THREE.Color(0x3399ff);
     }
 
     function getColor(id) {
@@ -389,6 +448,7 @@
         arr[3] = b[0];
         arr[4] = b[1];
         arr[5] = b[2];
+        line.material.uniforms.color.value = getEdgeColor(line.userData.a, line.userData.b);
         line.geometry.attributes.position.needsUpdate = true;
       });
     }
@@ -419,19 +479,18 @@
 
     function handleForceImmediate(args, onFinish) {
       const [event] = args;
-      
+
       switch (event) {
         case "start": {
           const [_, pre, post] = args;
           tree = { start: [] };
           pos = { start: [0, 0, 0] };
-          ctx = {};
           nctx = {};
-          
+
           addNodeVisual("start", new THREE.BoxGeometry(4, 4, 4));
           break;
         }
-        
+
         case "node": {
           const [_, typ, pid, cid, pre, post] = args;
           const id = String(cid);
@@ -441,8 +500,6 @@
           tree[parent] = tree[parent] || [];
           tree[parent].push(id);
           tree[id] = [];
-
-          ctx[id] = "OK";
 
           // začetna postavitev novega vozlišča
           const radius = l;
@@ -525,7 +582,7 @@
             }
 
             computeNodeTypes();
-            // console.log(nctx, octx, end);
+            propagateProofState();
             updateVisuals();
 
             it++;
@@ -538,7 +595,7 @@
 
         case "end": {
           const [_, cid, pre, post] = args;
-          
+
           if (post instanceof At && pre.some(p => eq(p, post))) {
             end[cid] = "SUCCESS";
           } else {
@@ -563,7 +620,7 @@
 
       scene.rotation.z += 0.0007;
       scene.rotation.x += 0.0007;
-      camera.position.y += 0.0005;
+      camera.position.z += 0.0005;
 
       renderer.render(scene, camera);
     }

@@ -445,20 +445,31 @@
             );
 
             const mat = new THREE.ShaderMaterial({
-                uniforms: { time: { value: 0 } },
+                uniforms: {
+                    time: { value: 0 },
+                    color: { value: new THREE.Color(0xffffff) }
+                },
                 vertexShader: `
                 void main() {
                     gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
                 }`,
                 fragmentShader: `
                 uniform float time;
+                uniform vec3 color;
                 void main() {
-                    // gl_FragColor = vec4(vec3(0.5 + 0.5*sin(time*5.0)), 1.0);
-                    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+                    gl_FragColor = vec4(color, 1.0);
                 }`,
                 transparent: true,
             });
             
+            if (prover === 0) {
+                mat.uniforms.color.value = new THREE.Color(0xff4444);
+            } else if (prover === 1) {
+                mat.uniforms.color.value = new THREE.Color(0x44ff44);
+            } else if (prover === 2) {
+                mat.uniforms.color.value = new THREE.Color(0x4444ff);
+            }
+
             const line = new THREE.Line(geo, mat);
             line.renderOrder = 1;
             line.userData.a = a;
