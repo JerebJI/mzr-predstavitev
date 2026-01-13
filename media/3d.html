@@ -516,7 +516,11 @@
 
           // relaksacija
           let it = 0;
-          const maxIt = 20;
+          let maxIt = 20;
+
+          if (eventQueue.length == 0 && Object.keys(tree).length > 2) {
+            maxIt = 300;
+          }
 
           function relaxStep() {
             if (it >= maxIt) {
