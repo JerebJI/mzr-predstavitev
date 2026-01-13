@@ -396,7 +396,7 @@
         let fail = true;
         for (const child of tree[id]) {
           if (ctx[child] === "SUCCESS") succ = true;
-          if (ctx[child] !== "SUCCESS") fail = false;
+          if (ctx[child] !== "FAILURE") fail = false;
         }
         if (succ) {
           ctx[id] = "SUCCESS";
