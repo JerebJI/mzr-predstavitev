@@ -393,10 +393,10 @@
       }
       if (nctx[id] === "try") {
         let succ = false;
-        let fail = false;
+        let fail = true;
         for (const child of tree[id]) {
           if (ctx[child] === "SUCCESS") succ = true;
-          if (ctx[child] !== "SUCCESS") fail = true;
+          if (ctx[child] !== "SUCCESS") fail = false;
         }
         if (succ) {
           ctx[id] = "SUCCESS";
